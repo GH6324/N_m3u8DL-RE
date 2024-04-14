@@ -445,18 +445,65 @@ namespace N_m3u8DL_RE.Parser.Extractor
                                     );
                         }
 
-                        //判断加密情况
-                        if (adaptationSet.Elements().Concat(representation.Elements()).Any(e => e.Name.LocalName == "ContentProtection"))
+                    //解析加密信息  优先手动设置
+                    EncryptInfo currentEncryptInfo = new();
+                    if (ParserConfig.CustomMethod != null)
+                        currentEncryptInfo.Method = ParserConfig.CustomMethod.Value;
+                    if (ParserConfig.CustomeKey != null && ParserConfig.CustomeKey.Length > 0)
+                        currentEncryptInfo.Key = ParserConfig.CustomeKey;
+                    if (ParserConfig.CustomeIV != null && ParserConfig.CustomeIV.Length > 0)
+                        currentEncryptInfo.IV = ParserConfig.CustomeIV;
+                    foreach (var e in adaptationSet.Elements().Concat(representation.Elements()))
+                    {
+                        var AES = false;
+                        var IV = new byte[16];
+                        if (e.Name.LocalName == "ContentProtection")
                         {
-                            if (streamSpec.Playlist.MediaInit != null)
+                            if (e.Attribute("schemeIdUri")?.Value == "urn:mpeg:dash:sea:2012")
                             {
-                                streamSpec.Playlist.MediaInit.EncryptInfo.Method = DEFAULT_METHOD;
+                                foreach (var sea in e.Elements())
+                                {
+                                    if (sea.Name.LocalName == "SegmentEncryption")
+                                    {
+                                        if (sea.Attribute("schemeIdUri")?.Value == "urn:mpeg:dash:sea:aes128-cbc:2013")
+                                        {
+                                            streamSpec.Playlist.MediaInit!.EncryptInfo.Method =
+                                                EncryptMethod.AES_128;
+                                            AES = true;
+                                        }
+                                    }else if (sea.Name.LocalName == "CryptoPeriod")
+                                    {
+                                        var keyUriTemplate = sea.Attribute("keyUriTemplate")?.Value;
+                                        IV = HexUtil.HexToBytes(sea.Attribute("IV")?.Value!);
+                                        currentEncryptInfo.IV = IV;
+                                        currentEncryptInfo.Method = EncryptMethod.AES_128;
+                                        //key 需要添加请求头 所以必须手动添加
+                                        if (currentEncryptInfo.Key == null)
+                                        {
+                                            Logger.Error("need the key");
+                                            Thread.Sleep(3000);
+                                            Environment.Exit(1);
+                                        }
+                                    }
+                                }
                             }
-                            foreach (var item in streamSpec.Playlist.MediaParts[0].MediaSegments)
+
+                            if (!AES)
                             {
-                                item.EncryptInfo.Method = DEFAULT_METHOD;
+                                if (streamSpec.Playlist.MediaInit != null)
+                                    streamSpec.Playlist.MediaInit.EncryptInfo= currentEncryptInfo;
+                                foreach (var item in streamSpec.Playlist.MediaParts[0].MediaSegments)
+                                    item.EncryptInfo.Method = DEFAULT_METHOD;
+                            }else 
+                            {
+                                if (streamSpec.Playlist.MediaInit != null)
+                                    streamSpec.Playlist.MediaInit.EncryptInfo=currentEncryptInfo;
+                                foreach (var item in streamSpec.Playlist.MediaParts[0].MediaSegments)
+                                    item.EncryptInfo = currentEncryptInfo;
                             }
+                            break;
                         }
+                    }
 
                         //处理同一ID分散在不同Period的情况
                         var _index = streamList.FindIndex(_f => _f.PeriodId != streamSpec.PeriodId && _f.GroupId == streamSpec.GroupId && _f.Resolution == streamSpec.Resolution && _f.MediaType == streamSpec.MediaType);
